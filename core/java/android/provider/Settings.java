@@ -13640,6 +13640,12 @@ public final class Settings {
                 "accessibility_display_magnification_edge_haptic_enabled";
 
         /**
+         * Lockscreen custom clock face
+         * @hide
+         */
+        public static final String LOCK_SCREEN_CUSTOM_CLOCK_STYLE = "lock_screen_custom_clock_style";
+
+        /**
          * If 1, DND default allowed packages have been updated
          *
          *  @hide
