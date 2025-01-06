@@ -8919,6 +8919,21 @@ public final class Settings {
         public static final String DOCKED_CLOCK_FACE = "docked_clock_face";
 
         /**
+         * @hide
+         */
+        public static final String ONGOING_ACTION_CHIP = "ongoing_action_chip";
+
+        /**
+         * @hide
+         */
+        public static final String ONGOING_MEDIA_PROGRESS = "ongoing_media_progress";
+
+        /**
+         * @hide
+         */
+        public static final String ONGOING_COMPACT_MODE = "ongoing_compact_mode";
+
+        /**
          * Setting to indicate that content filters should be enabled on web browsers.
          *
          * <ul>
