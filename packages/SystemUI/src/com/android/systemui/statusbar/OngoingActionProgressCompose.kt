@@ -573,7 +573,6 @@ class OnGoingActionProgressComposeController(
                     isMediaPlaying = state.isMediaPlaying,
                     trackTitle = state.trackTitle,
                     artistName = state.artistName,
-                    appLabel = state.appLabel,
                 )
             }
         }
