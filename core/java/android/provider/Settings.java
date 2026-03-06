@@ -8903,6 +8903,11 @@ public final class Settings {
                 "lock_screen_allow_remote_input";
 
         /**
+         * @hide
+         */
+        public static final String ONGOING_CHIP_COLOR_MODE = "ongoing_chip_color_mode";
+
+        /**
          * Indicates which clock face to show on lock screen and AOD formatted as a serialized
          * {@link org.json.JSONObject} with the format:
          *     {"clock": id, "_applied_timestamp": timestamp}

@@ -80,6 +80,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.core.graphics.ColorUtils
+import com.android.systemui.media.controls.ui.binder.SeekBarObserver
+import com.android.systemui.media.controls.ui.drawable.SquigglyProgress
 import com.android.systemui.res.R
 import com.android.systemui.statusbar.VibratorHelper
 import com.android.systemui.statusbar.notification.headsup.HeadsUpManager
@@ -96,6 +99,8 @@ private const val TAG = "OngoingActionProgressCompose"
 
 private const val EXPAND_DURATION_MS = 350
 private const val COLLAPSE_DURATION_MS = 250
+
+private const val CHIP_TEXT_LUMINANCE_THRESHOLD = 0.6
 
 /**
  * Composable that displays an ongoing action progress indicator in the status bar.
@@ -422,17 +427,57 @@ private fun SeekBarCompose(
                 max = 10_000
                 splitTrack = false
 
-                thumb?.mutate()?.setTint(android.graphics.Color.WHITE)
-                progressDrawable?.mutate()?.setTint(android.graphics.Color.WHITE)
+                val pillThumb = ctx.createQsPillThumb()
+                thumb = pillThumb
+                thumbOffset = pillThumb.intrinsicWidth / 2
 
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(
-                        sb: SeekBar?,
-                        v: Int,
-                        fromUser: Boolean
-                    ) {
-                        if (fromUser) onSeek(v / 10_000f)
+                val layer = (progressDrawable?.mutate() as? LayerDrawable)
+
+                if (layer != null) {
+                    val bg = layer.findDrawableByLayerId(android.R.id.background)
+                    bg?.mutate()?.setTint(
+                        com.android.internal.graphics.ColorUtils.setAlphaComponent(android.graphics.Color.WHITE, 90)
+                    )
+
+                    val secondary = layer.findDrawableByLayerId(android.R.id.secondaryProgress)
+                    secondary?.mutate()?.setTint(
+                        com.android.internal.graphics.ColorUtils.setAlphaComponent(android.graphics.Color.WHITE, 60)
+                    )
+
+                    // Replace ONLY the progress layer with SquigglyProgress.
+                    val squiggle = SquigglyProgress().apply {
+                        waveLength =
+                            ctx.resources.getDimensionPixelSize(
+                                R.dimen.qs_media_seekbar_progress_wavelength
+                            ).toFloat()
+                        lineAmplitude =
+                            ctx.resources.getDimensionPixelSize(
+                                R.dimen.qs_media_seekbar_progress_amplitude
+                            ).toFloat()
+                        phaseSpeed =
+                            ctx.resources.getDimensionPixelSize(
+                                R.dimen.qs_media_seekbar_progress_phase
+                            ).toFloat()
+                        strokeWidth =
+                            ctx.resources.getDimensionPixelSize(
+                                R.dimen.qs_media_seekbar_progress_stroke_width
+                            ).toFloat()
+
+                        setTint(android.graphics.Color.WHITE)
+                        drawRemainingLine = false
+                        transitionEnabled = false
+                        animate = false
                     }
+
+                    layer.setDrawableByLayerId(android.R.id.progress, squiggle)
+                    progressDrawable = layer
+                }
+
+                setOnSeekBarChangeListener(
+                    object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(sb: SeekBar?, v: Int, fromUser: Boolean) {
+                            if (fromUser) onSeek(v / 10_000f)
+                        }
 
                     override fun onStartTrackingTouch(sb: SeekBar?) {
                         isScrubbing = true
@@ -478,8 +523,16 @@ private fun MusicChip(
     chipShape: RoundedCornerShape,
     gestureModifier: Modifier,
 ) {
-    val bg = colorResource(android.R.color.system_accent1_500)
-    val text = colorResource(android.R.color.system_accent1_100)
+    val bg = if (state.chipBgColor != null)
+        Color(state.chipBgColor)
+    else
+        colorResource(android.R.color.system_accent1_500)
+
+    val text = if (state.chipBgColor != null &&
+            ColorUtils.calculateLuminance(state.chipBgColor) >= CHIP_TEXT_LUMINANCE_THRESHOLD)
+        Color.Black
+    else
+        colorResource(android.R.color.system_accent1_100)
 
     Row(
         modifier = Modifier
@@ -573,6 +626,7 @@ class OnGoingActionProgressComposeController(
                     isMediaPlaying = state.isMediaPlaying,
                     trackTitle = state.trackTitle,
                     artistName = state.artistName,
+                    chipBgColor = state.chipBgColor,
                 )
             }
         }
