@@ -259,6 +259,75 @@ class OnGoingActionProgressController(
         }
     }
 
+    private fun invalidateChipBgColor() {
+        currentChipBgColor = null
+        lastColorExtractedIcon = null
+        lastColorExtractedAlbumArt = null
+    }
+
+    private suspend fun extractDominantColorFromBitmap(bitmap: Bitmap): Int? =
+        withContext(bgDispatcher) {
+            try {
+                if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return@withContext null
+
+                val palette = Palette.from(bitmap).generate()
+
+                val candidates = listOfNotNull(
+                    palette.vibrantSwatch,
+                    palette.mutedSwatch,
+                    palette.dominantSwatch,
+                    palette.darkVibrantSwatch,
+                    palette.darkMutedSwatch,
+                )
+
+                candidates
+                    .map { it.rgb }
+                    .firstOrNull { color ->
+                        val alpha = Color.alpha(color)
+                        val luminance = ColorUtils.calculateLuminance(color)
+                        alpha > 200 && luminance > 0.05 && luminance < 0.95
+                    }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to extract dominant color from bitmap", e)
+                null
+            }
+        }
+
+    private fun extractAndApplyChipBgColorFromIcon(icon: Drawable) {
+        if (!isMediaSessionActiveForChip()) return
+        if (icon === lastColorExtractedIcon && chipIconColor != null) return
+
+        mainScope.launch {
+            val size = (48f * context.resources.displayMetrics.density).toInt().coerceAtLeast(1)
+            val bitmap = try {
+                withContext(bgDispatcher) {
+                    val safeIcon = icon.mutate().apply {
+                        setBounds(0, 0, size, size)
+                    }
+                    safeIcon.toBitmap(width = size, height = size, config = Bitmap.Config.ARGB_8888)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to rasterize icon for chip color extraction", e)
+                null
+            } ?: return@launch
+
+            lastColorExtractedIcon = icon
+            chipIconColor = extractDominantColorFromBitmap(bitmap)
+            updateProgressState()
+        }
+    }
+
+    private fun extractAndApplyChipBgColorFromAlbumArt(albumArt: Bitmap) {
+        if (!isMediaSessionActiveForChip()) return
+        if (albumArt === lastColorExtractedAlbumArt && chipAlbumColor != null) return
+
+        mainScope.launch {
+            lastColorExtractedAlbumArt = albumArt
+            chipAlbumColor = extractDominantColorFromBitmap(albumArt)
+            updateProgressState()
+        }
+    }
+
     private fun updateProgressState() {
         var isVisible = !isForceHidden && !headsUpPinned && !isSystemChipVisible
         val hasMediaSession = isMediaSessionActiveForChip()
@@ -431,12 +500,17 @@ class OnGoingActionProgressController(
         if (inFlightIconLoads.containsKey(packageName)) return
 
         val job = mainScope.launch {
+            val sizePx = (24f * context.resources.displayMetrics.density).toInt().coerceAtLeast(1)
             val drawable = withContext(bgDispatcher) {
-                fetchPackageIcon(packageName)
-            }
-
-            val sizePx = (24f * context.resources.displayMetrics.density).toInt()
-            drawable.setBounds(0, 0, sizePx, sizePx)
+                try {
+                    fetchPackageIcon(packageName).mutate().apply {
+                        setBounds(0, 0, sizePx, sizePx)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to load/prepare icon for $packageName", e)
+                    null
+                }
+            } ?: return@launch
 
             iconCache[packageName] = drawable
             onLoaded(drawable)
