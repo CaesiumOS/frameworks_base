@@ -483,38 +483,6 @@ internal constructor(
         viewProxy.stopInputListening()
     }
 
-    private fun playScreenshotSound() {
-        var playSound = false
-        var playHaptic = false
-        when (audioManager.ringerMode) {
-            AudioManager.RINGER_MODE_SILENT -> {
-                // do nothing
-            }
-            AudioManager.RINGER_MODE_VIBRATE -> {
-                playHaptic = true
-            }
-            AudioManager.RINGER_MODE_NORMAL -> {
-                // in this case we want to play sound even if not forced on
-                playSound = true
-                playHaptic = true
-            }
-        }
-        if (playSound && Settings.System.getIntForUser(
-                context.contentResolver,
-                Settings.System.SCREENSHOT_SHUTTER_SOUND,
-                1,
-                UserHandle.USER_CURRENT
-            ) == 1
-        ) {
-            screenshotSoundController.playScreenshotSoundAsync()
-        }
-        if (playHaptic) {
-            vibrator?.takeIf { it.hasVibrator() }?.vibrate(
-                VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE)
-            )
-        }
-    }
-
     /**
      * Save the bitmap but don't show the normal screenshot UI.. just a toast (or notification on
      * failure).
