@@ -14,7 +14,6 @@ import android.content.Intent
 import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.drawable.Drawable
 import android.media.MediaMetadata
 import android.net.Uri
 import android.os.Handler
@@ -27,9 +26,10 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.compose.runtime.Immutable
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.drawable.toBitmap
-import androidx.palette.graphics.Palette
 import com.android.systemui.res.R
 import com.android.systemui.statusbar.notification.headsup.HeadsUpManager
 import com.android.systemui.statusbar.notification.headsup.OnHeadsUpChangedListener
@@ -76,7 +76,6 @@ class OnGoingActionProgressController(
     private var headsUpPinned = false
     private var isEnabled = false
     private var isCompactModeEnabled = false
-    private var chipColorMode = CHIP_COLOR_MODE_DEFAULT
 
     private var currentProgress = 0
     private var currentProgressMax = 0
@@ -92,6 +91,8 @@ class OnGoingActionProgressController(
     private var lastColorExtractedAlbumArt: Bitmap? = null
     private var chipIconColor: Int? = null
     private var chipAlbumColor: Int? = null
+
+    private var lastObservedTitle: String? = null
 
     private var isMenuVisible = false
     private var isSystemChipVisible = false
@@ -123,8 +124,8 @@ class OnGoingActionProgressController(
                 if (uri == null) return
                 if (uri == Settings.System.getUriFor(ONGOING_ACTION_CHIP_ENABLED) ||
                     uri == Settings.System.getUriFor(ONGOING_MEDIA_PROGRESS) ||
-                    uri == Settings.System.getUriFor(ONGOING_COMPACT_MODE_ENABLED) ||
-                    uri == Settings.System.getUriFor(ONGOING_CHIP_COLOR_MODE)) {
+                    uri == Settings.System.getUriFor(Settings.System.ONGOING_COMPACT_MODE) ||
+                    uri == Settings.System.getUriFor(Settings.System.ONGOING_CHIP_COLOR_MODE)) {
                     updateSettings()
                 }
             }
@@ -149,7 +150,7 @@ class OnGoingActionProgressController(
                     UserHandle.USER_ALL
                 )
                 contentResolver.registerContentObserver(
-                    Settings.System.getUriFor(ONGOING_CHIP_COLOR_MODE),
+                    Settings.System.getUriFor(Settings.System.ONGOING_CHIP_COLOR_MODE),
                     false,
                     this,
                     UserHandle.USER_ALL
@@ -172,6 +173,36 @@ class OnGoingActionProgressController(
         override fun onPlaybackStateChanged() {
             pauseStaleCheck()
             requestUiUpdate()
+        }
+    }
+
+    private fun onTrackChanged() {
+        needsFullUiUpdate = true
+        currentAlbumArt = null
+        scheduleAlbumArtRetry()
+    }
+
+    private fun scheduleAlbumArtRetry() {
+        albumArtRetryJob?.cancel()
+        albumArtRetryJob = mainScope.launch {
+            repeat(ALBUM_ART_RETRY_COUNT) {
+                val metadata = mediaSessionHelper.mediaMetadata.value
+                val art =
+                    metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                        ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+                        ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+
+                if (art != null) {
+                    currentAlbumArt = art
+                    if (chipColorMode == CHIP_COLOR_MODE_ALBUM_ART) {
+                        invalidateChipBgColor()
+                        currentAlbumArt?.let { extractAndApplyChipBgColorFromAlbumArt(it) }
+                    }
+                    requestUiUpdate()
+                    return@launch
+                }
+                delay(ALBUM_ART_RETRY_INTERVAL_MS)
+            }
         }
     }
 
@@ -261,72 +292,6 @@ class OnGoingActionProgressController(
         }
     }
 
-    private fun invalidateChipBgColor() {
-        currentChipBgColor = null
-        lastColorExtractedIcon = null
-        lastColorExtractedAlbumArt = null
-    }
-
-    private suspend fun extractDominantColorFromBitmap(bitmap: Bitmap): Int? =
-        withContext(bgDispatcher) {
-            try {
-                if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return@withContext null
-
-                val palette = Palette.from(bitmap).generate()
-
-                val candidates = listOfNotNull(
-                    palette.vibrantSwatch,
-                    palette.mutedSwatch,
-                    palette.dominantSwatch,
-                    palette.darkVibrantSwatch,
-                    palette.darkMutedSwatch,
-                )
-
-                candidates
-                    .map { it.rgb }
-                    .firstOrNull { color ->
-                        val alpha = Color.alpha(color)
-                        val luminance = ColorUtils.calculateLuminance(color)
-                        alpha > 200 && luminance > 0.05 && luminance < 0.95
-                    }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to extract dominant color from bitmap", e)
-                null
-            }
-        }
-
-    private fun extractAndApplyChipBgColorFromIcon(icon: Drawable) {
-        if (!isMediaSessionActiveForChip()) return
-        if (icon === lastColorExtractedIcon && chipIconColor != null) return
-
-        mainScope.launch {
-            val size = (48f * context.resources.displayMetrics.density).toInt().coerceAtLeast(1)
-            val bitmap = try {
-                withContext(bgDispatcher) {
-                    icon.toBitmap(width = size, height = size, config = Bitmap.Config.ARGB_8888)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to rasterize icon for chip color extraction", e)
-                null
-            } ?: return@launch
-
-            lastColorExtractedIcon = icon
-            chipIconColor = extractDominantColorFromBitmap(bitmap)
-            updateProgressState()
-        }
-    }
-
-    private fun extractAndApplyChipBgColorFromAlbumArt(albumArt: Bitmap) {
-        if (!isMediaSessionActiveForChip()) return
-        if (albumArt === lastColorExtractedAlbumArt && chipAlbumColor != null) return
-
-        mainScope.launch {
-            lastColorExtractedAlbumArt = albumArt
-            chipAlbumColor = extractDominantColorFromBitmap(albumArt)
-            updateProgressState()
-        }
-    }
-
     private fun updateProgressState() {
         var isVisible = !isForceHidden && !headsUpPinned && !isSystemChipVisible
         val hasMediaSession = isMediaSessionActiveForChip()
@@ -349,7 +314,6 @@ class OnGoingActionProgressController(
                     isMediaPlaying = false,
                     trackTitle = null,
                     artistName = null,
-                    chipBgColor = null,
                 )
             )
             return
@@ -359,16 +323,6 @@ class OnGoingActionProgressController(
         val isMediaPlaying = showMediaProgress && mediaSessionHelper.isMediaPlaying()
         val trackTitle = if (hasMediaSession) currentTrackTitle else null
         val artistName = if (hasMediaSession) currentArtistName else null
-
-        if (hasMediaSession) {
-            if (chipColorMode == CHIP_COLOR_MODE_ICON &&
-                    chipIconColor != null) {
-                currentChipBgColor = chipIconColor
-            } else if (chipColorMode == CHIP_COLOR_MODE_ALBUM_ART &&
-                    chipAlbumColor != null) {
-                currentChipBgColor = chipAlbumColor
-            }
-        }
 
         publish(
             ProgressState(
@@ -383,7 +337,6 @@ class OnGoingActionProgressController(
                 isMediaPlaying = isMediaPlaying,
                 trackTitle = trackTitle,
                 artistName = artistName,
-                chipBgColor = currentChipBgColor,
             )
         )
     }
@@ -471,7 +424,40 @@ class OnGoingActionProgressController(
         currentProgress = pos.toInt()
         currentProgressMax = totalDuration.toInt().takeIf { it > 0 } ?: 100
 
-        updateProgressState()
+        val mediaAppIcon = mediaSessionHelper.getMediaAppIcon()
+        if (mediaAppIcon != null) {
+            currentIcon = mediaAppIcon
+            updateChipIconColor()
+            return
+        }
+
+        val pkg = playbackState?.extras?.getString("package")
+        if (pkg.isNullOrEmpty()) {
+            setDefaultMediaIcon()
+            return
+        }
+
+        loadIcon(pkg) { drawable ->
+            if (drawable != null) {
+                currentIcon = drawable
+                updateChipIconColor()
+            } else {
+                setDefaultMediaIcon()
+            }
+            updateProgressState()
+        }
+    }
+
+    private fun setDefaultMediaIcon() {
+        currentIcon = context.resources.getDrawable(R.drawable.ic_default_music_icon, context.theme)
+        updateChipIconColor()
+    }
+
+    private fun updateChipIconColor() {
+        if (chipColorMode == CHIP_COLOR_MODE_ICON && currentIcon != null) {
+            invalidateChipBgColor()
+            currentIcon?.let { extractAndApplyChipBgColorFromIcon(it) }
+        }
     }
 
     private fun updateNotificationProgress() {
@@ -815,6 +801,9 @@ class OnGoingActionProgressController(
     }
 
     private fun updateSettings() {
+        val wasEnabled = isEnabled
+        val wasShowingMedia = showMediaProgress
+        val wasCompactMode = isCompactModeEnabled
         val wasChipColorMode = chipColorMode
 
         isEnabled = Settings.System.getIntForUser(
@@ -840,7 +829,7 @@ class OnGoingActionProgressController(
 
         chipColorMode = Settings.System.getIntForUser(
             contentResolver,
-            ONGOING_CHIP_COLOR_MODE,
+            Settings.System.ONGOING_CHIP_COLOR_MODE,
             CHIP_COLOR_MODE_DEFAULT,
             UserHandle.USER_CURRENT
         )
@@ -856,6 +845,7 @@ class OnGoingActionProgressController(
             } else if (chipColorMode == CHIP_COLOR_MODE_ICON && currentIcon != null) {
                 currentIcon?.let { extractAndApplyChipBgColorFromIcon(it) }
             }
+            needsFullUiUpdate = true
         }
 
         requestUiUpdate()
@@ -902,6 +892,9 @@ class OnGoingActionProgressController(
         private const val COMPACT_COLLAPSE_TIMEOUT_MS = 10000L
         private const val MENU_COLLAPSE_TIMEOUT_MS = 5000L
         private const val PAUSED_STALE_GRACE_MS = 20000L
+        private const val ALBUM_ART_RETRY_COUNT = 5
+        private const val ALBUM_ART_RETRY_INTERVAL_MS = 300L
+        private const val POSITION_RESET_THRESHOLD_MS = 1_500L
 
         const val CHIP_COLOR_MODE_DEFAULT = 0
         const val CHIP_COLOR_MODE_ICON = 1
@@ -929,5 +922,4 @@ data class ProgressState(
     val isMediaPlaying: Boolean = false,
     val trackTitle: String? = null,
     val artistName: String? = null,
-    val chipBgColor: Int? = null,
 )
