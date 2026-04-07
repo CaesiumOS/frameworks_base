@@ -2299,4 +2299,7 @@
     <dimen name="tile_details_entry_start_margin">16dp</dimen>
     <!-- Tile Details end -->
 
+    <!-- Lockscreen clock -->
+    <dimen name="custom_clock_frame_margin_top">0dp</dimen>
+    <!-- Lockscreen clock end -->
 </resources>
