@@ -53,7 +53,7 @@ constructor(
                 }
             }
 
-            override fun onFlashlightStrengthChanged(level: Int) {}
+            fun onFlashlightStrengthChanged(level: Int) {}
         }
 
     private fun startLevelObserver() {
